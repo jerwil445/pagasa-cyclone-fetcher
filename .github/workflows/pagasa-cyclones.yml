@@ -3,8 +3,9 @@ name: Archive official PAGASA cyclone bulletins
 on:
   workflow_dispatch:
   schedule:
-    # UTC. Twice hourly reduces prototype minutes versus a five-minute job.
-    - cron: '7,37 * * * *'
+    # UTC: every five minutes at :02, :07, ... :57, avoiding the exact hour.
+    # Requested cadence only: GitHub may delay or drop scheduled events.
+    - cron: '2-59/5 * * * *'
 
 permissions:
   contents: read
