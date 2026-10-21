@@ -1,0 +1,36 @@
+name: Archive official PAGASA cyclone bulletins
+
+on:
+  workflow_dispatch:
+  schedule:
+    # UTC. Twice hourly reduces prototype minutes versus a five-minute job.
+    - cron: '7,37 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pagasa-cyclone-archive
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install fetch-only dependency
+        run: python -m pip install 'requests>=2.32.4,<3'
+      - name: Validate repository secrets
+        run: |
+          test -n "$SUPABASE_URL" && test -n "$SUPABASE_SECRET_KEY" || { echo 'Configure the required Supabase repository secrets.'; exit 1; }
+      - name: Fetch and archive official source
+        run: python -B -m services.cyclone_cloud_job
