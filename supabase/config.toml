@@ -1,0 +1,3 @@
+# Custom reader-token validation happens inside this function.
+[functions.weather-pdf]
+verify_jwt = false
