@@ -1,0 +1,3 @@
+# Standalone fetcher only: never install Flask, OpenCV or hardware dependencies.
+requests==2.34.2
+pypdf==6.21.1
