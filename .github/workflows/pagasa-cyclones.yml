@@ -17,7 +17,7 @@ concurrency:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 12
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
@@ -28,10 +28,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install fetch-only dependency
-        run: python -m pip install 'requests>=2.32.4,<3'
+      - name: Install fetch-only dependencies
+        run: python -m pip install -r requirements-cloud.txt
       - name: Validate repository secrets
         run: |
           test -n "$SUPABASE_URL" && test -n "$SUPABASE_SECRET_KEY" || { echo 'Configure the required Supabase repository secrets.'; exit 1; }
       - name: Fetch and archive official source
         run: python -B -m services.cyclone_cloud_job
+      - name: Archive daily weather, rainfall and official PDFs
+        if: ${{ always() && !cancelled() }}
+        run: python -B -m services.weather_cloud_job
