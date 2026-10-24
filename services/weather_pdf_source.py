@@ -83,5 +83,7 @@ def verify_issue(data, issue, title):
         storm = title.split(' |')[0]
         number = re.search(r'Bulletin #(\d+)', title)
         if not re.search(r'\b' + re.escape(storm) + r'\b', text, re.I) or (number and not re.search(
-                r'BULLETIN\s*(?:NO\.?|#)?\s*' + number[1] + r'\b', text, re.I)):
+                # PAGASA also uses "NR. 17F" for a numbered final bulletin.
+                # Keep the exact numeric identity; only the known F suffix is optional.
+                r'\bBULLETIN\s*(?:(?:NO|NR)\.?|#)?\s*' + number[1] + r'(?:F)?\b', text, re.I)):
             raise ValueError('PDF cyclone identity differs from the saved bulletin.')
