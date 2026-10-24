@@ -1,5 +1,6 @@
 """Read-only PAGASA cyclone importing. No ESP32/alert service dependencies."""
 import re
+import math
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
@@ -68,6 +69,12 @@ class CyclonePage(HTMLParser):
         if self.panel and not self.ignore:
             if tag in BLOCK:
                 self.panel['parts'].append('\n')
+            if tag == 'img':
+                # PAGASA can render the signal numeral as an icon, not text.
+                icon = urljoin(SOURCE_URL, attrs.get('src', ''))
+                number = re.fullmatch(r'tcws([1-5])\.png', urlsplit(icon).path.rsplit('/', 1)[-1], re.I)
+                if number and official_url(icon):
+                    self.panel['parts'].append(number.group(1))
             if tag in ('h3', 'h5'):
                 self.heading = [tag, []]
             if tag == 'a':
@@ -117,6 +124,49 @@ def section(text, label, following):
     return match[1].strip() if match else None
 
 
+def observed_par_status(position, headline=''):
+    """Use observed coordinates only, never forecast positions, for PAR membership.
+
+    PAGASA boundary: https://pagasa.dost.gov.ph/learning-tools/philippine-area-of-responsibility
+    Rhumb-line edges are straight in Mercator coordinates. Boundary points count
+    as inside; the result describes the reported center at this bulletin's time.
+    """
+    position = position or ''
+    coordinate = re.search(
+        r'(?<![\d.])([+-]?\d{1,3}(?:\.\d+)?)\s*°?\s*([NS])\s*[,;\s]+\s*'
+        r'([+-]?\d{1,3}(?:\.\d+)?)\s*°?\s*([EW])\b', position, re.I)
+    if coordinate:
+        lat, lon = float(coordinate[1]), float(coordinate[3])
+        if 0 <= lat <= 90 and 0 <= lon <= 180:
+            lat *= -1 if coordinate[2].upper() == 'S' else 1
+            lon *= -1 if coordinate[4].upper() == 'W' else 1
+            if not 5 <= lat <= 25 or not 115 <= lon <= 135:
+                return 'OUTSIDE PAR'
+            project = lambda latitude: math.log(math.tan(math.pi / 4 + math.radians(latitude) / 2))
+            y = project(lat)
+            west = 115 if lat <= 15 else (120 if lat >= 21 else
+                115 + 5 * (y - project(15)) / (project(21) - project(15)))
+            return 'INSIDE PAR' if lon >= west - 1e-9 else 'OUTSIDE PAR'
+    # Preserve explicit observed statements when coordinates are unavailable.
+    observed = headline + '\n' + position
+    par = r'(?:the\s+)?(?:PAR\b|Philippine Area of Responsibility\b)'
+    if re.search(r'\b(?:(?:has (?:already )?(?:exited|left)|is (?:now )?outside)\s+' + par + r'|outside\s+' + par + r')', observed, re.I):
+        return 'OUTSIDE PAR'
+    if re.search(r'\b(?:has (?:already )?entered|is (?:now )?(?:inside|within))\s+' + par, observed, re.I):
+        return 'ENTERED PAR'
+    return 'Not explicitly stated'
+
+
+def refresh_par_metadata(metadata):
+    """Re-evaluate old cloud/local metadata without trusting a forecast exit."""
+    result = dict(metadata)
+    result['par_status'] = observed_par_status(result.get('position'))
+    if result['par_status'] == 'Not explicitly stated':
+        # Older parsers stored explicit observed statements in this field.
+        result['par_status'] = metadata.get('par_status') or 'Not explicitly stated'
+    return result
+
+
 def parse_page(html):
     page = CyclonePage()
     page.feed(html)
@@ -141,12 +191,7 @@ def parse_page(html):
         strength = section(text, r'Strength', r'Forecast Position|Wind Signal')
         affected = section(text, r'Affected Areas', r'Meteorological Condition|Impact of the Wind|Precautionary Measures')
         headline = next((value for value in panel['headings'] if value != heading and not re.match(r'Issued at|\(Valid', value, re.I)), '')
-        observed = headline + '\n' + (position or '')
-        # Forecast lines saying "will exit" or "OUTSIDE PAR" are not observations.
-        par = r'(?:the\s+)?(?:PAR\b|Philippine Area of Responsibility\b)'
-        par_status = ('OUTSIDE PAR' if re.search(r'\b(?:(?:has (?:already )?(?:exited|left)|is (?:now )?outside)\s+' + par + r'|outside\s+' + par + r')', observed, re.I)
-                      else 'ENTERED PAR' if re.search(r'\b(?:has (?:already )?entered|is (?:now )?(?:inside|within))\s+' + par, observed, re.I)
-                      else 'Not explicitly stated')
+        par_status = observed_par_status(position, headline)
         items.append(dict(storm_name=storm[2].strip().upper(), classification=storm[1].title(),
             bulletin_number=number[1] if number else None, issue_time=issue_time, text=text,
             position=position, movement=movement, strength=strength, affected_areas=affected,
