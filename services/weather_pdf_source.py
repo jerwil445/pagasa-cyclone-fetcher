@@ -44,6 +44,35 @@ def download_pdf(url):
     raise ValueError('Too many PDF redirects.')
 
 
+# An image-only daily forecast is accepted only if PAGASA's print tool created it
+# shortly before (or, if uploaded late, a few hours after) the issue time. PAGASA
+# issues every 12 hours, so this window can never match the previous/next issue.
+IMAGE_FORECAST_EARLIEST = timedelta(hours=3)
+IMAGE_FORECAST_LATEST = timedelta(hours=8)
+IMAGE_FORECAST_SIGNATURE = 'weather_forecast_print'
+
+
+def verify_image_forecast(reader, issue):
+    """Verify an image-only PAGASA daily forecast PDF from its creation metadata."""
+    if issue is None:
+        raise ValueError('PDF issue date/time could not be verified; not attached.')
+    metadata = reader.metadata or {}
+    if IMAGE_FORECAST_SIGNATURE not in str(metadata.get('/Title') or '').lower():
+        raise ValueError("Image-only PDF is not from PAGASA's forecast print page; not attached.")
+    try:
+        created = metadata.creation_date
+    except Exception:
+        created = None
+    if created is None:
+        raise ValueError('PDF has no creation time to verify the issue; not attached.')
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=PH)
+    expected = issue.replace(tzinfo=timezone.utc) if issue.tzinfo is None else issue
+    if not expected - IMAGE_FORECAST_EARLIEST <= created <= expected + IMAGE_FORECAST_LATEST:
+        raise ValueError('PDF was created for a different forecast issue; not attached.')
+    return 'timestamp'
+
+
 def verify_issue(data, issue, title):
     """Fail closed: require an explicit issue date/time, not forecast validity."""
     from pypdf import PdfReader
@@ -52,6 +81,9 @@ def verify_issue(data, issue, title):
         raise ValueError('Encrypted or unusually large PDF cannot be verified.')
     text = ' '.join((page.extract_text() or '') for page in reader.pages[:2])
     text = ' '.join(text.replace('\u00a0', ' ').split())
+    if not text and 'Daily Weather Forecast' in title:
+        # PAGASA's pf.pdf is a "Print to PDF" of its forecast page: images only, no text.
+        return verify_image_forecast(reader, issue)
     pattern = (r'Issued\s+(?:at|on)\s*:?\s*(\d{1,2}(?::\d{2})?\s*[AP]\.?M\.?)'
                r'\s*[,;]?\s*(?:today\s*[,;]?\s*)?(\d{1,2}\s+[A-Za-z]+\s*,?\s*\d{4})')
     match = re.search(pattern, text, re.I)
